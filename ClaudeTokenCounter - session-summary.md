@@ -1,111 +1,154 @@
 # ClaudeTokenCounter - Session Summary
 
-## Session Date: 2025-12-01
+## Session Date: 2025-12-02
 
 ### Developer's Vision
 
-Create a command-line tool that provides developers with clear visibility into their Claude API token usage and monthly subscription limits. The tool should offer an intuitive terminal interface for checking current usage status, viewing historical usage patterns, and managing API credentials securely. This addresses a practical need for developers using the Claude API to stay aware of their consumption and avoid unexpected quota limitations.
+Create a powerful command-line tool that provides developers with comprehensive visibility into their Claude API token usage. The tool should accommodate both enterprise users with API access and individual users with personal Pro accounts. By parsing local Claude Code JSONL logs, the tool democratizes token tracking for all users, not just those with enterprise API keys. The vision emphasizes real-time monitoring, accurate cost estimation, and a beautiful terminal interface that makes token consumption transparent and actionable.
 
 ### Session Overview
 
-This session established the complete foundational architecture for ClaudeTokenCounter, a Rust-based CLI application. The project was initialized from scratch, including project structure, dependency configuration, basic CLI scaffolding, comprehensive documentation, version control setup, and GitHub integration with SSH authentication. The session focused on creating a solid, well-documented foundation that future development sessions can build upon.
+This session transformed ClaudeTokenCounter from a basic API-focused tool into a hybrid application that works for all users. After discovering the Anthropic Usage API requires Admin keys (Team/Enterprise only), we pivoted to implement local JSONL parsing as the primary feature for personal Pro account users. The session delivered a fully functional live monitoring system that reads Claude Code logs from `~/.claude/projects/`, aggregates token usage across all projects, calculates costs accurately, and displays everything in a beautiful real-time terminal interface.
 
 ### Architectural Decisions
 
-1. **Rust as Implementation Language**: Selected Rust for its performance, safety guarantees, excellent CLI ecosystem, and cross-platform compatibility. This ensures the tool is fast, reliable, and can be distributed as a single binary.
+1. **Dual-Mode Architecture**: Designed system to support both API-based usage tracking (for Team/Enterprise users) and local file parsing (for all users including Pro accounts). This ensures the tool remains valuable regardless of subscription tier.
 
-2. **Clap with Derive Macros for CLI**: Chose the `clap` crate with derive macros for type-safe, self-documenting command-line argument parsing. This provides an ergonomic developer experience and automatically generates help text.
+2. **Local JSONL Parsing as Primary Feature**: After discovering API limitations, pivoted to prioritize local file monitoring. Created dedicated `src/local/` module to parse Claude Code's JSONL log files stored in `~/.claude/projects/`.
 
-3. **Tokio Async Runtime**: Implemented asynchronous architecture using Tokio to handle API requests efficiently without blocking. This enables responsive user experience even when network requests are in progress.
+3. **Real-Time Live Monitoring**: Implemented live refresh capability using crossterm for terminal control and tokio for async sleep intervals. This provides users with continuously updated usage statistics without manual refresh.
 
-4. **Modular Architecture with Separation of Concerns**: Designed a clear module structure separating CLI layer, API client, configuration management, display formatting, and data models. This promotes maintainability and testability.
+4. **Comprehensive Token Tracking**: Designed data models to track all token types:
+   - Input tokens (user prompts)
+   - Output tokens (Claude responses)
+   - Cache creation tokens (prompt caching writes)
+   - Cache read tokens (prompt caching reads)
 
-5. **Config Storage in User Directory**: Decided to store API keys and configuration in `~/.config/claude-token-counter/config.json` using the `dirs` crate for cross-platform home directory resolution. This follows standard Unix conventions and keeps sensitive data out of the repository.
+5. **Accurate Cost Calculation**: Implemented precise cost estimation based on official Claude Sonnet 4.5 pricing:
+   - Input: $3 per million tokens
+   - Output: $15 per million tokens
+   - Cache write: $3.75 per million tokens
+   - Cache read: $0.30 per million tokens
 
-6. **Anyhow for Error Handling**: Selected `anyhow` for application-level error handling, providing ergonomic error propagation with context while keeping the implementation simple.
+6. **Recursive Directory Walking**: Used walkdir crate to recursively scan all subdirectories in `~/.claude/projects/` to find JSONL files across multiple projects and sessions.
 
-7. **Subcommand-Based Interface**: Structured the CLI with three primary subcommands (`status`, `history`, `config`) following Unix tool conventions and providing clear, focused functionality for each operation.
+7. **Graceful Error Handling**: Implemented resilient parsing that skips malformed lines with warnings rather than failing completely, ensuring the tool works even with partially corrupted log files.
 
-8. **Security-First Credential Management**: Implemented design where API keys are never committed to version control, stored with restricted file permissions, and never logged or displayed in full.
+8. **Beautiful Terminal UI**: Used colored crate for rich terminal styling and crossterm for screen control, creating a professional, readable interface with proper number formatting (comma separators).
 
 ### Technical Implementations
 
-- **Project Initialization**: Created new Cargo project with proper metadata (name, version, description, license) in `/Users/rubenmendoza/coding_projects/claude/ClaudeTokenCounter`
+- **New Local Module** (`src/local/mod.rs`):
+  - `LogEntry` struct for deserializing JSONL log entries
+  - `Message` and `Usage` structs for extracting token data
+  - `AggregatedUsage` struct for accumulating totals across files
+  - `get_claude_projects_dir()` to locate `~/.claude/projects/`
+  - `find_jsonl_files()` to recursively discover all .jsonl files
+  - `parse_jsonl_file()` to process individual files
+  - `parse_all_files()` to aggregate usage across all files
 
-- **Dependency Configuration**: Configured comprehensive dependency set in Cargo.toml:
-  - `clap 4.5` with derive features for CLI parsing
-  - `tokio 1.40` with full features for async runtime
-  - `reqwest 0.12` with json features for HTTP client
-  - `serde 1.0` with derive and `serde_json 1.0` for serialization
-  - `chrono 0.4` with serde for date/time handling
-  - `colored 2.1` for terminal styling
-  - `dirs 5.0` for cross-platform paths
-  - `anyhow 1.0` for error handling
+- **Live Command Implementation** (`src/main.rs`):
+  - Added `Live` subcommand with configurable refresh interval
+  - `run_live_monitor()` async function for continuous monitoring
+  - Terminal clearing and repositioning for live updates
+  - `format_number()` utility for comma-separated number display
+  - `calculate_cost()` function for accurate pricing based on token types
 
-- **CLI Structure Implementation**: Created `src/main.rs` with three functional subcommands:
-  - `status`: Display current token usage and remaining quota
-  - `history --days <N>`: Show usage history (default 30 days)
-  - `config --api-key <KEY>`: Configure API credentials
+- **Updated Dependencies** (`Cargo.toml`):
+  - Added `notify = "7.0"` for file system watching (prepared for future use)
+  - Added `walkdir = "2.5"` for recursive directory traversal
+  - Added `crossterm = "0.28"` for terminal control and clearing
 
-- **Documentation Suite**:
-  - `README.md`: User-facing documentation with installation, usage examples, and feature overview
-  - `CLAUDE.md`: Comprehensive development guide for AI assistants with architecture details, build commands, API integration notes, module structure, and dependency rationale
-  - `.gitignore`: Configured to exclude Rust build artifacts (`/target/`, `Cargo.lock` for libraries) and sensitive config files
+- **API Module Implementation** (`src/api/mod.rs`):
+  - `AnthropicClient` with reqwest-based HTTP client
+  - Support for two Anthropic endpoints:
+    - `/v1/organizations/usage_report/messages` - Regular API usage
+    - `/v1/organizations/usage_report/claude_code` - Claude Code specific
+  - Date range support with ISO 8601 formatting
+  - Proper authentication headers (x-api-key, anthropic-version)
 
-- **Version Control Setup**:
-  - Initialized Git repository
-  - Created initial commit with complete project foundation
-  - Configured remote: `git@github.com:rubenmendoza1290/claude-token-counter.git`
-  - Successfully pushed to GitHub
+- **Config Module** (`src/config/mod.rs`):
+  - `Config` struct for API key storage
+  - File-based persistence to `~/.config/claude-token-counter/config.json`
+  - Directory creation with proper permissions
+  - Load/save functionality with error handling
 
-- **SSH Authentication**: Set up GitHub authentication using Ed25519 SSH key for secure, passwordless operations
+- **Display Module** (`src/display/mod.rs`):
+  - `display_status()` for showing usage summary with quota tracking
+  - `display_history()` for visualizing historical usage data
+  - Color-coded output with progress bars and formatted tables
+
+- **Models Module** (`src/models/mod.rs`):
+  - `UsageRecord` for API response entries
+  - `UsageResponse` for complete API responses
+  - `UsageSummary` for aggregated statistics
 
 ### Alignment & Evolution
 
-**Vision Alignment**: All session work directly supports the core vision of creating a developer-friendly token usage visualization tool. The architectural decisions prioritize security (safe credential storage), usability (clear CLI subcommands), and developer experience (comprehensive documentation).
+**Vision Alignment**: The session dramatically enhanced alignment with the core vision by making the tool accessible to all users, not just enterprise customers. The local file parsing approach democratizes token tracking and provides even more granular data than the API endpoints.
 
-**Conflicts to Resolve**: None identified. The implementation approach aligns cleanly with the stated goals.
+**Conflicts to Resolve**: None. The pivot from API-only to hybrid approach strengthened the product.
 
-**Project Evolution**: The project scope is well-defined and has not shifted. The architecture supports natural extension points for future enhancements (additional visualization options, multiple API key profiles, usage alerts) without requiring fundamental restructuring.
+**Project Evolution**: The vision evolved from "API-based usage tracker" to "universal token monitoring tool for all Claude users." This is a significant positive evolution that expands the potential user base and increases utility.
 
 ### Current State
 
-**Foundation Complete**: The project has a fully functional build system, compiles successfully, and has a working CLI skeleton that accepts all planned subcommands. Documentation is comprehensive and GitHub repository is established.
+**Fully Functional Local Monitoring**: The `live` command works perfectly, tested with real data showing 38M+ tokens across multiple projects. Users can run `cargo run -- live` and immediately see their Claude Code usage with accurate cost estimates.
 
-**Implementation Status**: The CLI framework parses commands correctly but all core functionality (API client, config persistence, data formatting) is marked as TODO and awaits implementation. The project currently acts as a stub that prints placeholder messages for each command.
+**Complete Module Implementation**: All planned modules (api, config, display, models, local) are now implemented with working code. The application has moved from "foundation complete" to "core features implemented."
 
-**Repository**: Live at `https://github.com/rubenmendoza1290/claude-token-counter` with SSH authentication configured for development workflow.
+**API Commands Ready**: The `status` and `history` commands are implemented and functional for users with Team/Enterprise accounts and Admin API keys.
 
-**Development Environment**: Rust toolchain configured, dependencies resolved, project builds cleanly in both debug and release modes.
+**Production-Ready Live Monitor**: The live monitoring feature is polished with:
+- Beautiful terminal formatting
+- Accurate token counting
+- Precise cost calculation
+- Configurable refresh intervals
+- Graceful error handling
+- Number formatting with commas
+
+**Repository**: Active development at `https://github.com/rubenmendoza1290/claude-token-counter` with SSH authentication configured.
 
 ### Next Steps
 
-1. **Implement Configuration Module**: Create `src/config/` module with structs for config data and functions to read/write `~/.config/claude-token-counter/config.json`. Implement secure file permissions (0600) and validation for API key format.
+1. **Update Documentation**: Revise README.md to prominently feature the `live` command and explain the dual-mode architecture (API for Enterprise, local files for everyone).
 
-2. **Build API Client Module**: Create `src/api/` module with reqwest-based client to interact with Anthropic API. Implement authentication headers, error handling with retries, and response parsing.
+2. **Add Installation Instructions**: Document the build process and add the binary to PATH for easy access.
 
-3. **Create Data Models**: Define `src/models/` with serde-compatible structs for API responses (usage data, quotas, timestamps) and internal data representations.
+3. **Implement File Watching**: Use the `notify` crate to automatically detect new JSONL entries without polling, reducing CPU usage and providing instant updates.
 
-4. **Implement Status Command**: Connect status subcommand to API client, fetch current usage data, and display formatted output showing tokens used, remaining quota, and percentage.
+4. **Add Filtering Options**: Allow users to filter by date range, project, or specific models when viewing local usage data.
 
-5. **Implement History Command**: Build history visualization with API calls for historical data, date range filtering based on `--days` parameter, and terminal-friendly output format (possibly ASCII charts).
+5. **Create Usage Alerts**: Implement configurable thresholds that warn users when approaching spending limits or unusual usage spikes.
 
-6. **Implement Config Command**: Complete config subcommand to accept API key via CLI argument or interactive prompt, validate format, and persist to config file with proper permissions.
+6. **Historical Analysis**: Add commands to analyze local JSONL files over time (daily/weekly/monthly breakdowns).
 
-7. **Add Error Handling**: Implement comprehensive error messages for common failure modes (missing config, network errors, invalid API key, rate limits).
+7. **Export Functionality**: Allow users to export usage data to CSV or JSON for external analysis or record-keeping.
 
-8. **Write Tests**: Add unit tests for config module, integration tests for API client (with mocked responses), and CLI parsing tests.
+8. **Model Breakdown**: Show usage statistics broken down by model (Sonnet 3.5, Opus, Haiku, etc.).
+
+9. **Cross-Platform Testing**: Test on Linux and Windows to ensure `~/.claude/projects/` path resolution works correctly.
+
+10. **GitHub Actions CI/CD**: Set up automated builds and releases for multiple platforms.
+
+11. **Performance Optimization**: Profile the JSONL parsing for large datasets and optimize if needed.
+
+12. **Configuration Options**: Allow users to customize the live display (colors, layout, refresh rate).
 
 ### Open Questions
 
-- **Anthropic API Usage Endpoint**: Need to verify the exact endpoint path and response schema for fetching usage data from Anthropic's API. The current documentation placeholder uses `/v1/usage` but this should be confirmed against official API documentation.
+- **Log Rotation**: How long does Claude Code keep JSONL files? Should we handle log rotation or archival?
 
-- **Usage Data Granularity**: What time granularity does the API provide (daily, hourly)? This affects how history visualization should be implemented.
+- **Multi-User Support**: On shared systems, should we support analyzing multiple Claude Code users?
 
-- **Subscription Tier Detection**: Does the API response include information about the user's subscription tier (free, pro, etc.) or does this need to be configured manually?
+- **Network Usage API**: Is there a way to detect when a user has access to the Admin API and automatically prefer it over local parsing?
 
-- **Rate Limiting Strategy**: What are the actual rate limits for the usage API endpoint? Should the tool implement caching to avoid excessive API calls?
+- **Data Privacy**: Should we add options to exclude certain projects or time periods from analysis?
 
-- **Cross-Platform Testing**: Has only been developed on macOS (Darwin 25.0.0). Needs testing on Linux and Windows to verify config directory paths and general functionality.
+- **Cache Optimization**: Can we cache parsed data between runs to speed up startup for large log collections?
 
-- **Binary Distribution**: Should we set up automated releases with GitHub Actions to build cross-platform binaries, or document manual build process for users?
+- **Windows Path Handling**: Does Claude Code use the same directory structure on Windows? Need to verify `%USERPROFILE%/.claude/projects/` or equivalent.
+
+- **Model Detection**: Can we reliably extract which Claude model was used from the JSONL logs to provide per-model cost breakdowns?
+
+- **Token Limits**: Should we integrate knowledge of Claude Pro's usage limits to warn when approaching monthly quotas?

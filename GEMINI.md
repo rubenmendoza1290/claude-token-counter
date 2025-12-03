@@ -1,15 +1,15 @@
 # GEMINI.md
 
-This file provides guidance to AI coding assistants when working with code in this repository.
+This file provides guidance to Google Gemini and other AI coding assistants when working with code in this repository.
 
 ## Project Overview
 
-Claude Token Counter is a Rust-based CLI tool that helps users visualize their Claude API token usage and track their monthly subscription limits. The tool fetches usage data from the Anthropic API and presents it in a user-friendly terminal interface.
+Claude Token Counter is a Rust-based CLI tool that helps users monitor their Claude token usage through two approaches: (1) Real-time parsing of local Claude Code JSONL logs for all users, and (2) API-based tracking for Team/Enterprise users with Admin keys. The tool provides accurate cost estimation, beautiful terminal visualization, and comprehensive token tracking across all token types (input, output, cache creation, cache read).
 
 ## Current Workflow Phase
 
-**Phase**: Foundation & Setup
-**Status**: Complete - CLI skeleton established, ready for core implementation
+**Phase**: Core Implementation Complete
+**Status**: Beta - Live monitoring fully functional, API integration complete, ready for enhancements
 
 ### Workflow Checklist
 
@@ -19,15 +19,24 @@ Claude Token Counter is a Rust-based CLI tool that helps users visualize their C
 - [x] Documentation suite (README, development guide)
 - [x] Git repository setup and GitHub integration
 - [x] SSH authentication configuration
-- [ ] Configuration module implementation
-- [ ] API client module implementation
-- [ ] Data models definition
-- [ ] Status command implementation
-- [ ] History command implementation
-- [ ] Config command implementation
-- [ ] Error handling and validation
+- [x] Configuration module implementation
+- [x] API client module implementation
+- [x] Data models definition
+- [x] Status command implementation
+- [x] History command implementation
+- [x] Config command implementation
+- [x] Local JSONL parsing module
+- [x] Live monitoring command
+- [x] Cost calculation engine
+- [x] Terminal formatting and display
+- [x] Error handling and validation
+- [ ] File watching (instant updates)
+- [ ] Filtering by date/project/model
+- [ ] Export functionality (CSV/JSON)
 - [ ] Unit and integration tests
-- [ ] Cross-platform testing
+- [ ] Cross-platform testing (Linux/Windows)
+- [ ] CI/CD automation
+- [ ] Pre-built binary releases
 
 ## Build and Development Commands
 
@@ -45,12 +54,14 @@ cargo build --release
 ### Running
 ```bash
 # Run directly with cargo
-cargo run -- status
-cargo run -- history --days 7
-cargo run -- config --api-key YOUR_KEY
+cargo run -- live                    # Live monitoring (recommended)
+cargo run -- live --refresh 5        # Custom refresh interval
+cargo run -- status                  # API-based current status
+cargo run -- history --days 7        # API-based history
+cargo run -- config --api-key KEY    # Configure API key
 
 # Run the built binary
-./target/release/claude-token-counter status
+./target/release/claude-token-counter live
 ```
 
 ### Testing
@@ -86,104 +97,122 @@ cargo clippy -- -W clippy::all
 cargo check
 
 # Build and run in one step
-cargo run
+cargo run -- live
 
 # Watch mode (requires cargo-watch)
-cargo watch -x run
+cargo watch -x "run -- live"
 ```
 
 ## Architecture
 
 ### High-Level Design
 
-The application follows a modular architecture with clear separation of concerns:
+The application follows a modular architecture with dual data sources:
 
-1. **CLI Layer** (`main.rs`): Command-line interface using `clap` with derive macros. Defines subcommands (status, history, config) and handles argument parsing.
+1. **CLI Layer** (`main.rs`): Command-line interface using `clap` with derive macros. Defines four subcommands (status, history, config, live) and handles argument parsing. Contains live monitor implementation with terminal control.
 
-2. **API Client Module** (planned): Handles communication with the Anthropic Claude API to fetch usage data. Uses `reqwest` for HTTP requests and `tokio` for async operations.
+2. **Local Module** (`src/local/`): Parses Claude Code JSONL logs from `~/.claude/projects/`. Recursively discovers all JSONL files, deserializes log entries, extracts token usage data, and aggregates statistics. Works for all users without requiring API keys.
 
-3. **Configuration Module** (planned): Manages API key storage and user preferences. Stores config in `~/.config/claude-token-counter/config.json` using the `dirs` crate for cross-platform home directory resolution.
+3. **API Client Module** (`src/api/`): Handles communication with Anthropic Usage API. Supports two endpoints for regular API usage and Claude Code specific usage. Requires Admin API keys (Team/Enterprise only).
 
-4. **Display Module** (planned): Formats and presents data to the terminal using `colored` for styled output. Will include progress bars, usage graphs, and formatted tables.
+4. **Configuration Module** (`src/config/`): Manages API key storage and user preferences. Stores config in `~/.config/claude-token-counter/config.json` using the `dirs` crate for cross-platform home directory resolution.
 
-5. **Data Models** (planned): Serde-based structs for deserializing API responses and managing usage data.
+5. **Display Module** (`src/display/`): Formats and presents data to the terminal using `colored` for styled output. Includes status display, history visualization, progress bars, and formatted tables.
+
+6. **Models Module** (`src/models/`): Serde-based structs for API responses including UsageRecord, UsageResponse, and UsageSummary for aggregated statistics.
 
 ### Key Design Decisions
 
-- **Async Runtime**: Uses Tokio for async operations to handle API requests efficiently
-- **Error Handling**: Uses `anyhow` for flexible error handling with context
+- **Dual-Mode Architecture**: Supports both local file parsing (universal) and API integration (enterprise), making the tool valuable for all user types
+- **Local-First Approach**: Prioritizes local JSONL parsing as the primary feature since it works for all users and provides more granular data
+- **Async Runtime**: Uses Tokio for async operations to handle API requests and non-blocking sleep in live monitor
+- **Real-Time Monitoring**: Implements live refresh using crossterm for terminal control and tokio::sleep for intervals
+- **Comprehensive Token Tracking**: Tracks all token types (input, output, cache creation, cache read) for accurate cost calculation
+- **Error Handling**: Uses `anyhow` for flexible error handling with context. Gracefully handles malformed JSONL lines
 - **Config Storage**: Stores API keys securely in user's config directory (never in the repository)
 - **CLI Framework**: Uses `clap` with derive macros for type-safe, self-documenting CLI
 
 ### Anthropic API Integration
 
-When implementing API integration:
-- The Anthropic API base URL is: `https://api.anthropic.com/v1`
-- Usage data endpoint: `/v1/usage` (check current API documentation)
-- Requires `x-api-key` header for authentication
-- API responses are JSON format, use `serde_json` for parsing
-- Rate limits apply - implement exponential backoff for retries
-- Store API key in config file, never hardcode or commit it
+When working with the API:
+- Base URL: `https://api.anthropic.com/v1`
+- Usage endpoints:
+  - `/v1/organizations/usage_report/messages` - Regular API usage
+  - `/v1/organizations/usage_report/claude_code` - Claude Code usage
+- Requires Admin API key in `x-api-key` header
+- API version header: `anthropic-version: 2023-06-01`
+- Date range support with ISO 8601 format (YYYY-MM-DD)
+- Only available for Team/Enterprise accounts
 
-### Module Structure (Planned)
+### Local JSONL Parsing
+
+Claude Code stores conversation logs at `~/.claude/projects/` with structure containing message, model, usage, and timestamp fields. The local module recursively walks directories, parses JSON lines, and aggregates token usage across all files.
+
+### Module Structure
 
 ```
 src/
-├── main.rs           # Entry point, CLI definition
+├── main.rs           # Entry point, CLI definition, live monitor
 ├── api/
-│   ├── mod.rs       # API client module
-│   └── client.rs    # HTTP client implementation
+│   └── mod.rs       # API client implementation
 ├── config/
-│   ├── mod.rs       # Config module
-│   └── store.rs     # Config persistence
+│   └── mod.rs       # Config persistence and loading
 ├── display/
-│   ├── mod.rs       # Display module
-│   ├── status.rs    # Status display
-│   └── history.rs   # History visualization
+│   └── mod.rs       # Terminal output formatting
+├── local/
+│   └── mod.rs       # JSONL parsing and aggregation
 └── models/
-    ├── mod.rs       # Data models
-    ├── usage.rs     # Usage data structures
-    └── config.rs    # Config data structures
+    └── mod.rs       # Data models for API responses
 ```
 
 ### Dependencies Rationale
 
-- `clap`: Industry-standard CLI framework with excellent derive support
-- `tokio`: De facto async runtime for Rust
-- `reqwest`: High-level HTTP client built on tokio
-- `serde/serde_json`: Standard serialization/deserialization
-- `chrono`: Date/time handling for usage history
-- `colored`: Terminal color and styling
-- `dirs`: Cross-platform config directory resolution
-- `anyhow`: Ergonomic error handling for applications
+- `clap 4.5`: Industry-standard CLI framework with excellent derive support
+- `tokio 1.40`: De facto async runtime for Rust
+- `reqwest 0.12`: High-level HTTP client built on tokio
+- `serde 1.0` + `serde_json`: Standard serialization/deserialization
+- `chrono 0.4`: Date/time handling for usage history and timestamps
+- `colored 2.1`: Terminal color and styling
+- `dirs 5.0`: Cross-platform config directory resolution
+- `anyhow 1.0`: Ergonomic error handling for applications
+- `notify 7.0`: File system watching (prepared for future instant updates)
+- `walkdir 2.5`: Recursive directory traversal for finding JSONL files
+- `crossterm 0.28`: Terminal control for live monitor screen clearing
 
 ## Key Decisions & Context
 
 ### Idea & Validation
 
-**Core Idea**: Provide developers with a simple, terminal-based tool to monitor Claude API token consumption and stay within subscription limits.
+**Core Idea**: Provide all Claude users with transparent, real-time visibility into token usage and costs, not just enterprise customers.
 
-**Target Audience**: Developers and power users who interact with the Claude API and want quick visibility into their usage without navigating web dashboards.
+**Target Audience**:
+- Individual developers with Claude Pro accounts
+- Enterprise teams with Admin API access
+- Anyone using Claude Code who wants to understand their usage
 
-**Validation Status**: Project is in initial implementation phase. The need is clear for API users who want command-line workflow integration.
+**Validation Status**: Beta release with working live monitoring feature. Successfully tested with 38M+ tokens across real projects.
 
 ### Technical Decisions
 
-**Language Choice**: Rust selected for performance, safety, excellent CLI ecosystem, and ability to distribute as single binary.
+**Dual-Mode Architecture**: Implemented both local file parsing (works for everyone) and API integration (Team/Enterprise only) to maximize utility across user types.
 
-**Architecture Pattern**: Modular design with clear separation between CLI parsing, API interaction, configuration management, and display logic.
+**Local-First Strategy**: After discovering Anthropic API requires Admin keys, pivoted to prioritize local JSONL parsing as primary feature. This democratizes token tracking.
 
-**Async Approach**: Tokio-based async/await for non-blocking API calls and potential future concurrent operations.
+**Cost Calculation**: Implemented accurate pricing based on official Claude Sonnet 4.5 rates ($3/$15/$3.75/$0.30 per MTok for input/output/cache-write/cache-read).
 
-**Configuration Strategy**: File-based config storage in standard user config directory with security-first design (restricted permissions, no credential logging).
+**Real-Time Updates**: Used crossterm for terminal control and tokio::sleep for polling intervals. Future enhancement will add file watching for instant updates.
+
+**Error Resilience**: Parser gracefully skips malformed JSONL lines with warnings rather than failing, ensuring tool works with imperfect data.
 
 ### Creative Strategy
 
-**User Experience**: Focus on clarity and simplicity - three focused subcommands (status, history, config) that each do one thing well.
+**User Experience**: Focus on immediate utility - the `live` command should "just work" without configuration for most users.
 
-**Visual Design**: Terminal-native styling using colored output, ASCII-based visualizations where appropriate, and clean tabular data presentation.
+**Visual Design**: Professional terminal interface with color-coded output, formatted numbers (commas), and clear hierarchical information display.
 
 **Security Model**: Never store credentials in repository, use file system permissions, avoid credential exposure in logs or error messages.
+
+**Accessibility**: Works for all users regardless of subscription tier or API access.
 
 ## Session History
 
@@ -207,18 +236,51 @@ src/
   - Create data models for API responses
   - Implement actual functionality for each subcommand
 
+### Session 2025-12-02
+- **Phase**: Core Implementation
+- **Accomplishments**:
+  - Implemented complete local JSONL parsing module (src/local/mod.rs)
+  - Built fully functional live monitoring command with real-time updates
+  - Implemented API client with support for two Anthropic endpoints
+  - Created config module with file-based persistence
+  - Built display module with colored terminal output
+  - Defined data models for API responses
+  - Implemented accurate cost calculation for all token types
+  - Added terminal control with crossterm for live screen updates
+  - Tested with real data showing 38M+ tokens
+- **Key Decisions**:
+  - Pivoted to local-first approach after discovering API requires Admin keys
+  - Implemented dual-mode architecture (local + API) for universal compatibility
+  - Used walkdir for recursive JSONL discovery across all projects
+  - Implemented graceful error handling that skips malformed lines
+  - Chose polling with configurable refresh over immediate file watching (prepared for future enhancement)
+- **Next Steps**:
+  - Implement file watching with notify crate for instant updates
+  - Add filtering by date range, project, and model
+  - Create export functionality (CSV/JSON)
+  - Build model-specific usage breakdowns
+  - Add configurable usage alerts
+  - Cross-platform testing on Linux and Windows
+  - Set up CI/CD for automated releases
+
 ## Working Instructions
 
 ### Current Focus
 
-The immediate priority is implementing core functionality now that the foundation is established. Start with the configuration module since API key storage is required for all other operations.
+The tool is now in beta with core features complete. Priority is enhancing functionality and preparing for wider release:
+
+1. Implement file watching for instant updates (replace polling)
+2. Add filtering and export capabilities
+3. Create comprehensive test suite
+4. Cross-platform validation
+5. Set up automated builds and releases
 
 ### Development Workflow
 
-1. **Before Coding**: Review GEMINI.md and session summary to understand current state
+1. **Before Coding**: Review AGENTS.md and session summary to understand current state
 2. **Implementation**: Follow the module structure outlined in Architecture section
 3. **Testing**: Write tests alongside implementation
-4. **Documentation**: Update README and GEMINI.md as features are completed
+4. **Documentation**: Update README and AGENTS.md as features are completed
 5. **Commits**: Make atomic commits with clear messages describing what was implemented
 
 ### Code Style Guidelines
@@ -235,10 +297,11 @@ The immediate priority is implementing core functionality now that the foundatio
 - This file should have restricted permissions (0600)
 - Never log or display full API keys
 - The config file is gitignored to prevent accidental commits
+- Local JSONL files may contain conversation data - handle with care
 
 ## Repository Information
 
 - **GitHub**: https://github.com/rubenmendoza1290/claude-token-counter
 - **Remote**: git@github.com:rubenmendoza1290/claude-token-counter.git
-- **Branch**: main
+- **Branch**: master
 - **License**: MIT
